@@ -1,0 +1,14 @@
+{
+  "listen_host": "127.0.0.1",
+  "listen_port": 9090,
+
+  "upstream": {
+    "http":  "http://USER:PASS@proxy.example.com:8080",
+    "https": "http://USER:PASS@proxy.example.com:8080"
+  },
+
+  "include": ["*.example.com", "example.org"],
+  "bypass": ["internal.example.com"],
+  "bypass_localhost": true,
+  "insecure_tls_to_proxy": false
+}

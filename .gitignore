@@ -1,0 +1,7 @@
+.DS_Store
+ProxyOverride/.build/
+ProxyOverride/build/
+dist/
+# local configs may contain proxy credentials
+config.json
+*.local.json
