@@ -22,9 +22,17 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastError: String?
     @Published private(set) var logs: [LogLine] = []
     @Published var launchAtLogin = SMAppService.mainApp.status == .enabled
+    /// Per Mac (UserDefaults), never synced itself.
+    @Published private(set) var iCloudSync = UserDefaults.standard.bool(forKey: "iCloudSync")
+    @Published private(set) var lastSync: CloudConfig.Envelope?
+    @Published private(set) var backups: [CloudConfig.Backup] = []
 
     private let engine = ProxyEngine()
     private var bag = Set<AnyCancellable>()
+    /// The settings last pushed to or pulled from iCloud: only a local change
+    /// away from these is pushed, so two Macs never bounce the same copy back.
+    private var syncedSettings: Settings?
+    private var syncTimer: Timer?
 
     private init() {
         engine.log = { [weak self] line in
@@ -38,6 +46,7 @@ final class AppModel: ObservableObject {
             .sink { [weak self] s in
                 s.save()
                 self?.reapply()
+                self?.pushIfChanged(s)
             }
             .store(in: &bag)
         $passwords.dropFirst().removeDuplicates()
@@ -46,6 +55,9 @@ final class AppModel: ObservableObject {
                 for (k, v) in p { Keychain.setPassword(v, for: k) }
                 self?.reapply()
             }
+            .store(in: &bag)
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.pullIfNewer() }
             .store(in: &bag)
     }
 
@@ -65,6 +77,7 @@ final class AppModel: ObservableObject {
                 logRestore(leftovers)
             }
         }
+        if iCloudSync { startSyncing(adoptRemote: true) }
         if settings.overrideSystemProxy {
             setSystemOverride(true)
         } else if settings.startOnLaunch {
@@ -133,6 +146,104 @@ final class AppModel: ObservableObject {
     }
 
     func clearLogs() { logs.removeAll() }
+
+    // MARK: iCloud
+
+    func setICloudSync(_ on: Bool) {
+        guard on != iCloudSync else { return }
+        if on {
+            guard CloudConfig.isAvailable else { return fail(CloudError.unavailable) }
+            iCloudSync = true
+            UserDefaults.standard.set(true, forKey: "iCloudSync")
+            startSyncing(adoptRemote: true)
+        } else {
+            iCloudSync = false
+            UserDefaults.standard.set(false, forKey: "iCloudSync")
+            syncTimer?.invalidate()
+            syncTimer = nil
+            appendLog("iCloud sync off")
+        }
+    }
+
+    func backUpNow() {
+        do {
+            try CloudConfig.backup(settings)
+            appendLog("settings backed up to iCloud Drive")
+        } catch { fail(error) }
+        refreshBackups()
+    }
+
+    func restore(_ backup: CloudConfig.Backup) {
+        guard let s = CloudConfig.settings(in: backup) else {
+            return fail(CocoaError(.fileReadCorruptFile))
+        }
+        // keep what's being replaced, so a restore can itself be undone
+        _ = try? CloudConfig.backup(settings, note: "before restore")
+        settings = s
+        appendLog("settings restored from backup of \(backup.savedAt.formatted()) (\(backup.device))")
+        refreshBackups()
+    }
+
+    func deleteBackup(_ backup: CloudConfig.Backup) {
+        do { try CloudConfig.delete(backup) } catch { fail(error) }
+        refreshBackups()
+    }
+
+    func refreshBackups() {
+        backups = CloudConfig.isAvailable ? CloudConfig.backups() : []
+    }
+
+    /// Turning sync on: an existing iCloud copy wins (the local settings are
+    /// backed up first); with none yet, this Mac's settings become the copy.
+    private func startSyncing(adoptRemote: Bool) {
+        if adoptRemote, let remote = CloudConfig.pull() {
+            if remote.settings != settings {
+                _ = try? CloudConfig.backup(settings, note: "before sync")
+                apply(remote)
+            } else {
+                syncedSettings = remote.settings
+                lastSync = remote
+            }
+        } else {
+            pushIfChanged(settings)
+        }
+        refreshBackups()
+        syncTimer?.invalidate()
+        syncTimer = Timer.scheduledTimer(withTimeInterval: 15, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.pullIfNewer() }
+        }
+    }
+
+    private func pullIfNewer() {
+        guard iCloudSync, let remote = CloudConfig.pull() else { return }
+        // same copy as last seen: compare stamps for equality, not order, so a
+        // Mac whose clock is behind still gets picked up
+        if let last = lastSync, remote.savedAt == last.savedAt, remote.device == last.device { return }
+        if remote.settings == settings {
+            syncedSettings = remote.settings
+            lastSync = remote
+        } else {
+            apply(remote)
+        }
+    }
+
+    private func apply(_ remote: CloudConfig.Envelope) {
+        syncedSettings = remote.settings
+        lastSync = remote
+        settings = remote.settings
+        appendLog("settings synced from \(remote.device) (iCloud)")
+    }
+
+    private func pushIfChanged(_ s: Settings) {
+        guard iCloudSync, s != syncedSettings else { return }
+        do {
+            let at = try CloudConfig.push(s)
+            syncedSettings = s
+            lastSync = CloudConfig.Envelope(savedAt: at, device: CloudConfig.deviceName, settings: s)
+        } catch {
+            fail(error)
+        }
+    }
 
     private func logRestore(_ leftovers: [String]) {
         if leftovers.isEmpty {

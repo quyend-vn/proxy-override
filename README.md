@@ -60,9 +60,16 @@ The two switches in the menu:
 - Wildcards: `*.example.com` matches `example.com` and every subdomain. `?` matches one character.
 - **Bypass localhost** keeps `localhost`, `*.local` and private-network addresses (`10.*`, `192.168.*`, …) direct.
 
-### Moving to another Mac
+### iCloud sync, backup and restore
 
-Settings are in `~/Library/Application Support/ProxyOverride/settings.json`. Copy that file to the same place on the other Mac, then enter the passwords again: they're in each Mac's Keychain (service `ProxyOverride`) and never in the file or this repo.
+In **Settings → iCloud**:
+
+- **Sync settings with iCloud** keeps proxies, rules and options the same on every Mac signed in to the same Apple Account. A change on one Mac shows up on the others within about 15 seconds, or as soon as the app is brought to the front. Turning sync on adopts the copy already in iCloud, if there is one; this Mac's settings are backed up first.
+- **Back Up Now** saves a copy. **Restore** puts a backup back, after backing up the current settings, so a restore can be undone. The newest 30 backups are kept.
+
+Everything is stored as JSON in iCloud Drive (`iCloud Drive/ProxyOverride/settings.json` and `Backups/`), so iCloud Drive must be turned on. **Passwords are never synced**: they stay in each Mac's Keychain, so enter them once on each Mac. (Syncing them through iCloud Keychain would need an app signed with an Apple Developer account.)
+
+The sync switch itself is per Mac. Settings live locally in `~/Library/Application Support/ProxyOverride/settings.json`; without iCloud you can copy that file to another Mac by hand.
 
 ## How it works
 
@@ -119,6 +126,7 @@ Without an admin password macOS can't delete a field that didn't exist before. I
 | `ProxyOverride/Sources/ProxyOverride/ProxyEngine.swift` | Listener, protocol detection, routing rules, PAC serving |
 | `Conn.swift` | async/await wrapper around `NWConnection`, two-way relay |
 | `Settings.swift` | Settings model, JSON storage, PAC generation, Keychain |
+| `CloudConfig.swift` | iCloud Drive sync file and backups |
 | `SystemProxy.swift` | Snapshot, override and restore of the macOS proxy |
 | `AppModel.swift` | App state, start/stop, crash recovery |
 | `MenuPanel.swift`, `Views.swift` | Menu bar panel and Settings window (SwiftUI) |

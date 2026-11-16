@@ -9,6 +9,7 @@ struct MainView: View {
             UpstreamTab().tabItem { Label("External Proxy", systemImage: "network") }
             RulesTab().tabItem { Label("Rules", systemImage: "list.bullet") }
             GeneralTab().tabItem { Label("General", systemImage: "gearshape") }
+            CloudTab().tabItem { Label("iCloud", systemImage: "icloud") }
             LogsTab().tabItem { Label("Logs", systemImage: "text.alignleft") }
         }
         .padding()
@@ -174,6 +175,83 @@ private struct GeneralTab: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+private struct CloudTab: View {
+    @EnvironmentObject var model: AppModel
+    @State private var pendingRestore: CloudConfig.Backup?
+
+    var body: some View {
+        Form {
+            if !CloudConfig.isAvailable {
+                Section {
+                    Label("iCloud Drive is off on this Mac. Turn it on in System Settings → Apple Account → iCloud → iCloud Drive.",
+                          systemImage: "exclamationmark.icloud")
+                        .foregroundStyle(.orange)
+                }
+            }
+            Section {
+                Toggle("Sync settings with iCloud", isOn: Binding(
+                    get: { model.iCloudSync },
+                    set: { model.setICloudSync($0) }))
+                if model.iCloudSync, let last = model.lastSync {
+                    LabeledContent("Last synced") {
+                        Text("\(last.savedAt.formatted(date: .abbreviated, time: .shortened)) · \(last.device)")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            } header: {
+                Text("Sync")
+            } footer: {
+                Text("Keeps proxies, rules and options the same on every Mac signed in to your Apple Account, through iCloud Drive. Turning it on adopts the copy already in iCloud, if there is one; this Mac's settings are backed up first. Passwords are not synced: enter them once on each Mac.")
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                if model.backups.isEmpty {
+                    Text("No backups yet.").foregroundStyle(.secondary)
+                }
+                ForEach(model.backups) { b in
+                    HStack {
+                        VStack(alignment: .leading) {
+                            Text(b.savedAt.formatted(date: .abbreviated, time: .standard))
+                            Text([b.device, b.note].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button("Restore") { pendingRestore = b }
+                        Button(role: .destructive) { model.deleteBackup(b) } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless)
+                            .help("Delete this backup")
+                    }
+                }
+                HStack {
+                    Button("Back Up Now") { model.backUpNow() }
+                    Button("Show in Finder") {
+                        try? FileManager.default.createDirectory(at: CloudConfig.backupsFolder, withIntermediateDirectories: true)
+                        NSWorkspace.shared.activateFileViewerSelecting([CloudConfig.backupsFolder])
+                    }
+                    Spacer()
+                    Button { model.refreshBackups() } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.borderless).help("Reload")
+                }
+                .disabled(!CloudConfig.isAvailable)
+            } header: {
+                Text("Backups")
+            } footer: {
+                Text("Stored in iCloud Drive → ProxyOverride → Backups, so any of your Macs can restore them. The newest \(CloudConfig.maxBackups) are kept. Restoring backs up the current settings first.")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { model.refreshBackups() }
+        .confirmationDialog("Restore settings from this backup?", isPresented: Binding(
+            get: { pendingRestore != nil }, set: { if !$0 { pendingRestore = nil } }),
+            presenting: pendingRestore) { b in
+            Button("Restore") { model.restore(b) }
+        } message: { b in
+            Text("Replaces proxies, rules and options with the backup from \(b.savedAt.formatted()) (\(b.device)). Passwords on this Mac are kept.")
+        }
     }
 }
 
